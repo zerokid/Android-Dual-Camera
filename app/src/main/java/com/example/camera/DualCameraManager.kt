@@ -38,8 +38,12 @@ class DualCameraManager(
     private var activeCamera: Camera? = null
     private var concurrentCamera: ConcurrentCamera? = null
 
+    // Video Capture via CameraX (fallback)
     private var videoCapture: VideoCapture<Recorder>? = null
     private var currentRecording: Recording? = null
+
+    // Real-time Composite Recorder (Top-Down, Side-by-Side, PiP, 70:30 with synchronized Audio)
+    private var compositeRecorder: DualCompositeRecorder? = null
 
     var isHardwareConcurrentSupported: Boolean = false
         private set
@@ -47,8 +51,10 @@ class DualCameraManager(
     var hardwareInfo: HardwareDualCameraInfo = HardwareDualCameraInfo()
         private set
 
-    private var primaryPreviewView: PreviewView? = null
-    private var secondaryPreviewView: PreviewView? = null
+    var primaryPreviewView: PreviewView? = null
+        private set
+    var secondaryPreviewView: PreviewView? = null
+        private set
 
     private var currentPrimaryLens: LensFacing = LensFacing.BACK
     private var isTorchOn: Boolean = false
@@ -213,10 +219,49 @@ class DualCameraManager(
     }
 
     fun startRecording(
+        splitMode: SplitLayoutMode,
+        primaryLens: LensFacing,
+        secondaryLens: LensFacing,
+        pipPosition: PipPosition,
         audioEnabled: Boolean,
         onDurationUpdate: (Int) -> Unit,
+        onAudioLevelUpdate: (Float) -> Unit,
         onFinalize: (File?, Long, String?) -> Unit
     ) {
+        val primView = primaryPreviewView
+        if (primView == null) {
+            onFinalize(null, 0L, "Camera viewfinder is not ready")
+            return
+        }
+
+        // Use DualCompositeRecorder to ensure BOTH back and front cameras are saved into the same output video
+        try {
+            val recorder = DualCompositeRecorder(context, 720, 1280)
+            compositeRecorder = recorder
+            recorder.onDurationUpdate = onDurationUpdate
+            recorder.onAudioLevelUpdate = onAudioLevelUpdate
+
+            recorder.start(
+                splitMode = splitMode,
+                primaryLens = primaryLens,
+                secondaryLens = secondaryLens,
+                isHardwareConcurrent = isHardwareConcurrentSupported,
+                primaryPreviewView = primView,
+                secondaryPreviewView = secondaryPreviewView,
+                pipPosition = pipPosition,
+                audioEnabled = audioEnabled,
+                onFinalize = { file, durationMs, error ->
+                    compositeRecorder = null
+                    onFinalize(file, durationMs, error)
+                }
+            )
+            Log.i(tag, "Started DualCompositeRecorder with mode=$splitMode, audio=$audioEnabled")
+            return
+        } catch (e: Exception) {
+            Log.w(tag, "DualCompositeRecorder initiation failed, trying CameraX fallback", e)
+        }
+
+        // CameraX Fallback if composite encoder fails
         val capture = videoCapture ?: run {
             onFinalize(null, 0L, "Video recorder not ready")
             return
@@ -276,14 +321,18 @@ class DualCameraManager(
     }
 
     fun pauseRecording() {
+        compositeRecorder?.pause()
         currentRecording?.pause()
     }
 
     fun resumeRecording() {
+        compositeRecorder?.resume()
         currentRecording?.resume()
     }
 
     fun stopRecording() {
+        compositeRecorder?.stop()
+        compositeRecorder = null
         currentRecording?.stop()
         currentRecording = null
     }

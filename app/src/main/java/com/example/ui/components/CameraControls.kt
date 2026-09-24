@@ -136,6 +136,8 @@ fun ShutterButton(
 fun RecordingTimerBadge(
     recordingStatus: RecordingStatus,
     durationSec: Int,
+    audioLevel: Float = 0f,
+    audioEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     if (recordingStatus == RecordingStatus.IDLE) return
@@ -194,7 +196,11 @@ fun RecordingTimerBadge(
                 )
             } else {
                 Spacer(modifier = Modifier.width(8.dp))
-                AudioLevelVisualizer(isRecording = true)
+                AudioLevelVisualizer(
+                    isRecording = true,
+                    liveLevel = audioLevel,
+                    audioEnabled = audioEnabled
+                )
             }
         }
     }

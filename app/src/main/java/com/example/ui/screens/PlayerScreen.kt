@@ -177,6 +177,16 @@ fun PlayerScreen(
                                 setOnPreparedListener { mp ->
                                     totalDurationMs = mp.duration
                                     mp.isLooping = false
+                                    try {
+                                        mp.setVolume(1.0f, 1.0f)
+                                        val attrs = android.media.AudioAttributes.Builder()
+                                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MOVIE)
+                                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                                            .build()
+                                        mp.setAudioAttributes(attrs)
+                                    } catch (e: Exception) {
+                                        // Ignore if already set
+                                    }
                                     start()
                                     isPlaying = true
                                 }

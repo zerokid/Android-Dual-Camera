@@ -332,27 +332,44 @@ fun LensSlotBadge(
 @Composable
 fun AudioLevelVisualizer(
     isRecording: Boolean,
+    liveLevel: Float = 0f,
+    audioEnabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     if (!isRecording) return
 
+    if (!audioEnabled) {
+        Row(
+            modifier = modifier
+                .background(Color(0x99000000), RoundedCornerShape(12.dp))
+                .padding(horizontal = 6.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "MIC OFF",
+                color = Color.Gray,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        return
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "audio_meter")
-    val b1 by infiniteTransition.animateFloat(
-        initialValue = 0.2f, targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(tween(250), RepeatMode.Reverse), label = "b1"
+    val ambient1 by infiniteTransition.animateFloat(
+        initialValue = 0.1f, targetValue = 0.4f,
+        animationSpec = infiniteRepeatable(tween(300), RepeatMode.Reverse), label = "a1"
     )
-    val b2 by infiniteTransition.animateFloat(
-        initialValue = 0.4f, targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(tween(180), RepeatMode.Reverse), label = "b2"
+    val ambient2 by infiniteTransition.animateFloat(
+        initialValue = 0.2f, targetValue = 0.5f,
+        animationSpec = infiniteRepeatable(tween(220), RepeatMode.Reverse), label = "a2"
     )
-    val b3 by infiniteTransition.animateFloat(
-        initialValue = 0.1f, targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(tween(310), RepeatMode.Reverse), label = "b3"
-    )
-    val b4 by infiniteTransition.animateFloat(
-        initialValue = 0.3f, targetValue = 0.85f,
-        animationSpec = infiniteRepeatable(tween(220), RepeatMode.Reverse), label = "b4"
-    )
+
+    // Blend live RMS sound level with ambient animation
+    val level1 = (liveLevel * 1.2f + ambient1 * 0.3f).coerceIn(0.15f, 1.0f)
+    val level2 = (liveLevel * 1.4f + ambient2 * 0.4f).coerceIn(0.2f, 1.0f)
+    val level3 = (liveLevel * 1.6f + ambient1 * 0.25f).coerceIn(0.15f, 1.0f)
+    val level4 = (liveLevel * 1.1f + ambient2 * 0.35f).coerceIn(0.2f, 1.0f)
 
     Row(
         modifier = modifier
@@ -361,12 +378,12 @@ fun AudioLevelVisualizer(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        listOf(b1, b2, b3, b4).forEach { level ->
+        listOf(level1, level2, level3, level4).forEach { lvl ->
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .height((16 * level).coerceAtLeast(3f).dp)
-                    .background(CyberCyan, RoundedCornerShape(2.dp))
+                    .height((18 * lvl).coerceAtLeast(3f).dp)
+                    .background(if (liveLevel > 0.3f) CyberCyan else CyberCyan.copy(alpha = 0.8f), RoundedCornerShape(2.dp))
             )
         }
     }

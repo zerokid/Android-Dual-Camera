@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
@@ -34,10 +35,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,7 +46,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -54,6 +54,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -67,7 +70,6 @@ import com.example.ui.theme.BorderGlass
 import com.example.ui.theme.CyberCyan
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.DualCamTheme
 import com.example.ui.theme.RecordRed
 
@@ -86,31 +88,40 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainApp() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val viewModel: DualCamViewModel = viewModel()
     val navController = rememberNavController()
 
-    var hasCameraPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        )
-    }
-    var hasAudioPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        )
+    fun checkCam() = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    fun checkMic() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    var hasCameraPermission by remember { mutableStateOf(checkCam()) }
+    var hasAudioPermission by remember { mutableStateOf(checkMic()) }
+
+    // Re-check permissions when the app resumes (e.g. returning from settings)
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                hasCameraPermission = checkCam()
+                hasAudioPermission = checkMic()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        hasCameraPermission = permissions[Manifest.permission.CAMERA] == true ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        hasAudioPermission = permissions[Manifest.permission.RECORD_AUDIO] == true ||
-                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        hasCameraPermission = permissions[Manifest.permission.CAMERA] == true || checkCam()
+        hasAudioPermission = permissions[Manifest.permission.RECORD_AUDIO] == true || checkMic()
     }
 
-    if (!hasCameraPermission) {
+    // Crucial fix: Require BOTH camera AND audio permissions so videos are recorded with voice sound
+    if (!hasCameraPermission || !hasAudioPermission) {
         PermissionScreen(
+            hasCamera = hasCameraPermission,
+            hasMic = hasAudioPermission,
             onRequestPermissions = {
                 permissionLauncher.launch(
                     arrayOf(
@@ -158,6 +169,8 @@ fun MainApp() {
 
 @Composable
 fun PermissionScreen(
+    hasCamera: Boolean,
+    hasMic: Boolean,
     onRequestPermissions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -216,7 +229,7 @@ fun PermissionScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Simultaneous Front & Back Video Recording",
+                text = "Simultaneous Dual Video & Voice Audio",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CyberCyan,
                 fontWeight = FontWeight.SemiBold
@@ -225,7 +238,7 @@ fun PermissionScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "To record both camera angles at the same time and save synchronized audio, DualCam needs access to your camera and microphone.",
+                text = "DualCam records both front & back cameras into the same split/PIP video file and records crystal-clear voice audio from your microphone.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.LightGray,
                 textAlign = TextAlign.Center,
@@ -245,47 +258,68 @@ fun PermissionScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0x3300E5FF),
+                            color = if (hasCamera) Color(0x3300E676) else Color(0x3300E5FF),
                             modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Default.CameraAlt,
+                                    imageVector = if (hasCamera) Icons.Default.CheckCircle else Icons.Default.CameraAlt,
                                     contentDescription = null,
-                                    tint = CyberCyan,
+                                    tint = if (hasCamera) Color(0xFF00E676) else CyberCyan,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Camera Access", color = Color.White, fontWeight = FontWeight.Bold)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Camera Access", color = Color.White, fontWeight = FontWeight.Bold)
+                                if (hasCamera) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("✓ Granted", color = Color(0xFF00E676), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                             Text("Streams front and back lenses simultaneously", color = Color.Gray, fontSize = 12.sp)
                         }
                     }
 
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color(0x33FF2E63),
+                            color = if (hasMic) Color(0x3300E676) else Color(0x33FF2E63),
                             modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.Default.Mic,
+                                    imageVector = if (hasMic) Icons.Default.CheckCircle else Icons.Default.Mic,
                                     contentDescription = null,
-                                    tint = RecordRed,
+                                    tint = if (hasMic) Color(0xFF00E676) else RecordRed,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Column {
-                            Text("Microphone Access", color = Color.White, fontWeight = FontWeight.Bold)
-                            Text("Captures crisp, high-definition audio with video", color = Color.Gray, fontSize = 12.sp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Microphone Access", color = Color.White, fontWeight = FontWeight.Bold)
+                                if (hasMic) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("✓ Granted", color = Color(0xFF00E676), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                } else {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("• Required for Voice", color = RecordRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Text("Records voice & audio synchronized with video", color = Color.Gray, fontSize = 12.sp)
                         }
                     }
                 }
@@ -303,8 +337,8 @@ fun PermissionScreen(
                     .testTag("grant_permissions_button")
             ) {
                 Text(
-                    text = "Enable DualCam",
-                    fontSize = 16.sp,
+                    text = if (!hasCamera && !hasMic) "Enable Camera & Microphone" else if (!hasMic) "Enable Microphone Access" else "Enable Camera Access",
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
                 )
             }

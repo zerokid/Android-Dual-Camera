@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class DualCamUiState(
     val splitMode: SplitLayoutMode = SplitLayoutMode.VERTICAL_SPLIT,
@@ -32,6 +35,7 @@ data class DualCamUiState(
     val recordingStatus: RecordingStatus = RecordingStatus.IDLE,
     val recordingDurationSec: Int = 0,
     val audioEnabled: Boolean = true,
+    val audioLevel: Float = 0f,
     val torchEnabled: Boolean = false,
     val gridLinesEnabled: Boolean = false,
     val selectedFilter: VideoFilter = VideoFilter.NORMAL,
@@ -136,17 +140,27 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
         val manager = cameraManager ?: return
         if (_uiState.value.recordingStatus != RecordingStatus.IDLE) return
 
+        val state = _uiState.value
+
         _uiState.update {
             it.copy(
                 recordingStatus = RecordingStatus.RECORDING,
-                recordingDurationSec = 0
+                recordingDurationSec = 0,
+                audioLevel = 0f
             )
         }
 
         manager.startRecording(
-            audioEnabled = _uiState.value.audioEnabled,
+            splitMode = state.splitMode,
+            primaryLens = state.primaryLens,
+            secondaryLens = state.secondaryLens,
+            pipPosition = state.pipPosition,
+            audioEnabled = state.audioEnabled,
             onDurationUpdate = { durationSec ->
                 _uiState.update { it.copy(recordingDurationSec = durationSec) }
+            },
+            onAudioLevelUpdate = { level ->
+                _uiState.update { it.copy(audioLevel = level) }
             },
             onFinalize = { file, durationMs, errorMsg ->
                 if (file != null && file.exists()) {
@@ -155,6 +169,8 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
                     _uiState.update {
                         it.copy(
                             recordingStatus = RecordingStatus.IDLE,
+                            recordingDurationSec = 0,
+                            audioLevel = 0f,
                             toastMessage = errorMsg ?: "Recording stopped"
                         )
                     }
@@ -189,11 +205,19 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
     private fun onRecordingCompleted(file: File, durationMs: Long) {
         viewModelScope.launch {
             val state = _uiState.value
-            val title = "Duo Video ${file.nameWithoutExtension.removePrefix("DUOCAM_")}"
+            val modeName = when (state.splitMode) {
+                SplitLayoutMode.VERTICAL_SPLIT -> "Top-Down"
+                SplitLayoutMode.HORIZONTAL_SPLIT -> "Side-by-Side"
+                SplitLayoutMode.PIP -> "PiP"
+                SplitLayoutMode.FOCUS_70_30 -> "70:30 Focus"
+            }
+            val timeFormatted = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            val title = "DuoCam $modeName ($timeFormatted)"
+
             val video = RecordedVideo(
                 title = title,
                 filePath = file.absolutePath,
-                durationMs = durationMs,
+                durationMs = durationMs.coerceAtLeast(1000L),
                 fileSizeBytes = file.length(),
                 createdAt = System.currentTimeMillis(),
                 layoutMode = state.splitMode.name,
@@ -205,7 +229,8 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
                 it.copy(
                     recordingStatus = RecordingStatus.IDLE,
                     recordingDurationSec = 0,
-                    toastMessage = "Video saved to DuoCam Gallery!"
+                    audioLevel = 0f,
+                    toastMessage = "Dual $modeName video saved with audio!"
                 )
             }
         }

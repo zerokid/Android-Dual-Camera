@@ -188,6 +188,8 @@ fun CameraScreen(
             RecordingTimerBadge(
                 recordingStatus = uiState.recordingStatus,
                 durationSec = uiState.recordingDurationSec,
+                audioLevel = uiState.audioLevel,
+                audioEnabled = uiState.audioEnabled,
                 modifier = Modifier.padding(top = 6.dp)
             )
         }
