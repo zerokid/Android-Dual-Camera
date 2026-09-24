@@ -46,6 +46,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
+import android.view.ViewGroup
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,8 +66,17 @@ fun CameraPreviewSurface(
     modifier: Modifier = Modifier,
     zoomScale: Float = 1.0f
 ) {
+    DisposableEffect(previewView) {
+        onDispose {
+            (previewView.parent as? ViewGroup)?.removeView(previewView)
+        }
+    }
+
     AndroidView(
-        factory = { previewView },
+        factory = {
+            (previewView.parent as? ViewGroup)?.removeView(previewView)
+            previewView
+        },
         modifier = modifier
             .testTag("camera_preview_surface")
             .graphicsLayer {
@@ -73,7 +84,10 @@ fun CameraPreviewSurface(
                     scaleX = zoomScale
                     scaleY = zoomScale
                 }
-            }
+            },
+        update = { view ->
+            view.requestLayout()
+        }
     )
 }
 

@@ -144,6 +144,19 @@ fun CameraScreen(
         }
     }
 
+    // Rebind viewfinders seamlessly whenever layout split mode changes
+    LaunchedEffect(uiState.splitMode) {
+        val manager = viewModel.cameraManager ?: return@LaunchedEffect
+        // Short frame delay to allow Compose layout hierarchy to complete attachment
+        kotlinx.coroutines.delay(60)
+        manager.bindViewfinders(
+            primaryView = primaryPreviewView,
+            secondaryView = if (uiState.isHardwareConcurrent) secondaryPreviewView else null,
+            primaryLens = uiState.primaryLens,
+            onBound = {}
+        )
+    }
+
     LaunchedEffect(uiState.zoomRatio, uiState.isZooming) {
         if (uiState.isZooming) {
             kotlinx.coroutines.delay(1800)
