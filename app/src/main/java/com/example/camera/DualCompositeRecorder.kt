@@ -7,8 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Rect
-import android.graphics.RectF
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaCodec
@@ -24,8 +22,13 @@ import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES20
 import android.opengl.GLUtils
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.TextureView
+import android.view.View
+import android.view.ViewGroup
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import java.io.File
@@ -35,13 +38,15 @@ import java.nio.FloatBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.log10
 import kotlin.math.sqrt
 
 /**
  * Encodes a unified composite MP4 video file containing BOTH front and back
- * cameras (PIP, Side-by-Side, or Top-Down) along with synchronized audio from the microphone.
+ * cameras (PIP, Side-by-Side, Top-Down, or 70:30) along with synchronized audio from the microphone.
  */
 class DualCompositeRecorder(
     private val context: Context,
@@ -59,6 +64,18 @@ class DualCompositeRecorder(
     private var audioTrackIndex = -1
     private var muxerStarted = false
     private val muxerLock = Object()
+    private var recordStartTimeMs = 0L
+
+    // Pending buffers to prevent dropping initial keyframes before both tracks are registered
+    private class PendingBuffer(
+        val isVideo: Boolean,
+        val buffer: ByteBuffer,
+        val info: MediaCodec.BufferInfo
+    )
+    private val pendingBuffers = mutableListOf<PendingBuffer>()
+
+    // Main thread handler for safe UI-thread frame snapshot fallbacks
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Threads
     private var videoThread: Thread? = null
@@ -73,6 +90,10 @@ class DualCompositeRecorder(
     // Audio references
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: MediaCodec? = null
+
+    // Cached frames to ensure zero black/blank frames during capture jitter
+    private var lastValidPrimary: Bitmap? = null
+    private var lastValidSecondary: Bitmap? = null
 
     // Callbacks
     var onDurationUpdate: ((Int) -> Unit)? = null
@@ -107,6 +128,10 @@ class DualCompositeRecorder(
         videoTrackIndex = -1
         audioTrackIndex = -1
         muxerStarted = false
+        recordStartTimeMs = SystemClock.uptimeMillis()
+        synchronized(muxerLock) {
+            pendingBuffers.clear()
+        }
         isRecording.set(true)
         isPaused.set(false)
 
@@ -240,16 +265,34 @@ class DualCompositeRecorder(
                         synchronized(muxerLock) {
                             val newFormat = audioEncoder?.outputFormat ?: return
                             audioTrackIndex = mediaMuxer?.addTrack(newFormat) ?: -1
+                            Log.i(tag, "Audio track added with index $audioTrackIndex")
                             checkStartMuxerLocked(recordAudio = true)
                         }
                     } else if (outIndex >= 0) {
                         val encodedData = audioEncoder?.getOutputBuffer(outIndex)
-                        if (encodedData != null && (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
-                            synchronized(muxerLock) {
-                                if (muxerStarted && bufferInfo.size > 0 && audioTrackIndex >= 0) {
-                                    encodedData.position(bufferInfo.offset)
-                                    encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                                    mediaMuxer?.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
+                        if (encodedData != null) {
+                            if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                bufferInfo.size = 0
+                            }
+                            if (bufferInfo.size > 0) {
+                                synchronized(muxerLock) {
+                                    if (muxerStarted && audioTrackIndex >= 0) {
+                                        encodedData.position(bufferInfo.offset)
+                                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                        mediaMuxer?.writeSampleData(audioTrackIndex, encodedData, bufferInfo)
+                                    } else {
+                                        // Buffer audio until muxer starts
+                                        val copy = ByteBuffer.allocateDirect(bufferInfo.size)
+                                        encodedData.position(bufferInfo.offset)
+                                        encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                        copy.put(encodedData)
+                                        copy.flip()
+
+                                        val infoCopy = MediaCodec.BufferInfo().apply {
+                                            set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                        }
+                                        pendingBuffers.add(PendingBuffer(isVideo = false, buffer = copy, info = infoCopy))
+                                    }
                                 }
                             }
                         }
@@ -275,6 +318,54 @@ class DualCompositeRecorder(
                 audioEncoder = null
             } catch (ignored: Exception) {}
         }
+    }
+
+    private fun findTextureView(view: View?): TextureView? {
+        if (view == null) return null
+        if (view is TextureView) return view
+        if (view is ViewGroup) {
+            for (i in 0 until view.childCount) {
+                val child = view.getChildAt(i)
+                val tv = findTextureView(child)
+                if (tv != null) return tv
+            }
+        }
+        return null
+    }
+
+    private fun capturePreviewFrame(previewView: PreviewView?): Bitmap? {
+        if (previewView == null) return null
+
+        // Strategy 1: Direct TextureView snapshot (fast, does not have main-thread requirement)
+        val tv = findTextureView(previewView)
+        if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
+            try {
+                val bmp = tv.bitmap
+                if (bmp != null) return bmp
+            } catch (e: Throwable) {
+                Log.w(tag, "TextureView.bitmap capture failed: ${e.message}")
+            }
+        }
+
+        // Strategy 2: Safe UI-thread snapshot via PreviewView.bitmap
+        var capturedBmp: Bitmap? = null
+        val latch = CountDownLatch(1)
+        mainHandler.post {
+            try {
+                capturedBmp = previewView.bitmap
+            } catch (e: Throwable) {
+                Log.w(tag, "PreviewView.bitmap failed on UI thread: ${e.message}")
+            } finally {
+                latch.countDown()
+            }
+        }
+        try {
+            latch.await(30, TimeUnit.MILLISECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+
+        return capturedBmp
     }
 
     private fun runVideoEncoding(
@@ -310,7 +401,19 @@ class DualCompositeRecorder(
             var frameCount = 0L
             val frameIntervalMs = 1000L / 30L
 
-            // Pre-allocate secondary simulated bitmap canvas
+            // Fallback placeholder bitmap for initial frames before camera frames arrive
+            val placeholderPrimaryBitmap = Bitmap.createBitmap(width, height / 2, Bitmap.Config.ARGB_8888).apply {
+                val c = Canvas(this)
+                c.drawColor(Color.parseColor("#111827"))
+                val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.parseColor("#00E5FF")
+                    textSize = 28f
+                    textAlign = Paint.Align.CENTER
+                }
+                c.drawText("PRIMARY CAMERA", width * 0.5f, (height / 4).toFloat(), p)
+            }
+
+            // Pre-allocate secondary simulated bitmap canvas for single-camera devices
             val secondaryBitmap = Bitmap.createBitmap(width, height / 2, Bitmap.Config.ARGB_8888)
             val secondaryCanvas = Canvas(secondaryBitmap)
             val secPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -325,16 +428,25 @@ class DualCompositeRecorder(
                 if (startNs < 0) startNs = System.nanoTime()
                 val presentationTimeNs = System.nanoTime() - startNs
 
-                // 1. Fetch live primary camera frame
-                val primaryBitmap = try {
-                    primaryPreviewView.bitmap
-                } catch (e: Exception) {
-                    null
+                // 1. Fetch live primary camera frame with fallback to last valid frame
+                val primaryRaw = capturePreviewFrame(primaryPreviewView)
+                if (primaryRaw != null) {
+                    lastValidPrimary = primaryRaw
                 }
+                val primaryBitmap = primaryRaw ?: lastValidPrimary ?: placeholderPrimaryBitmap
 
                 // 2. Fetch or render secondary camera frame
                 val secBmp = if (isHardwareConcurrent && secondaryPreviewView != null) {
-                    try { secondaryPreviewView.bitmap } catch (e: Exception) { null }
+                    val secRaw = capturePreviewFrame(secondaryPreviewView)
+                    if (secRaw != null) {
+                        lastValidSecondary = secRaw
+                        secRaw
+                    } else {
+                        lastValidSecondary ?: run {
+                            renderSimulatedFrame(secondaryCanvas, secondaryBitmap, secPaint, secondaryLens, frameCount)
+                            secondaryBitmap
+                        }
+                    }
                 } else {
                     renderSimulatedFrame(secondaryCanvas, secondaryBitmap, secPaint, secondaryLens, frameCount)
                     secondaryBitmap
@@ -357,7 +469,7 @@ class DualCompositeRecorder(
                 durationMs = durationSec * 1000L
                 onDurationUpdate?.invoke(durationSec)
 
-                // 5. Drain encoded video buffers
+                // 5. Drain encoded video buffers and write to muxer
                 drainVideoEncoder(bufferInfo, recordAudio)
 
                 // Regulate frame rate (~30fps)
@@ -369,8 +481,17 @@ class DualCompositeRecorder(
             }
 
             // Finalize video stream
-            encoder.signalEndOfInputStream()
-            drainVideoEncoder(bufferInfo, recordAudio, isEndOfStream = true)
+            try {
+                encoder.signalEndOfInputStream()
+                drainVideoEncoder(bufferInfo, recordAudio, isEndOfStream = true)
+            } catch (e: Exception) {
+                Log.w(tag, "Error signaling end of stream", e)
+            }
+
+            // Wait for audio thread to complete its flushing before stopping muxer
+            try {
+                audioThread?.join(1000)
+            } catch (ignored: Exception) {}
 
             onComplete(durationMs, null)
         } catch (e: Exception) {
@@ -391,16 +512,34 @@ class DualCompositeRecorder(
                 synchronized(muxerLock) {
                     val newFormat = encoder.outputFormat
                     videoTrackIndex = mediaMuxer?.addTrack(newFormat) ?: -1
+                    Log.i(tag, "Video track added with index $videoTrackIndex")
                     checkStartMuxerLocked(recordAudio)
                 }
             } else if (outIndex >= 0) {
                 val encodedData = encoder.getOutputBuffer(outIndex)
-                if (encodedData != null && (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
-                    synchronized(muxerLock) {
-                        if (muxerStarted && bufferInfo.size > 0 && videoTrackIndex >= 0) {
-                            encodedData.position(bufferInfo.offset)
-                            encodedData.limit(bufferInfo.offset + bufferInfo.size)
-                            mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                if (encodedData != null) {
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                        bufferInfo.size = 0
+                    }
+                    if (bufferInfo.size > 0) {
+                        synchronized(muxerLock) {
+                            if (muxerStarted && videoTrackIndex >= 0) {
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
+                            } else {
+                                // Crucial: Buffer initial keyframe and early video frames so they are NOT dropped!
+                                val copy = ByteBuffer.allocateDirect(bufferInfo.size)
+                                encodedData.position(bufferInfo.offset)
+                                encodedData.limit(bufferInfo.offset + bufferInfo.size)
+                                copy.put(encodedData)
+                                copy.flip()
+
+                                val infoCopy = MediaCodec.BufferInfo().apply {
+                                    set(0, bufferInfo.size, bufferInfo.presentationTimeUs, bufferInfo.flags)
+                                }
+                                pendingBuffers.add(PendingBuffer(isVideo = true, buffer = copy, info = infoCopy))
+                            }
                         }
                     }
                 }
@@ -415,11 +554,27 @@ class DualCompositeRecorder(
     private fun checkStartMuxerLocked(recordAudio: Boolean) {
         if (muxerStarted) return
         val videoReady = videoTrackIndex >= 0
-        val audioReady = !recordAudio || audioTrackIndex >= 0
+        // If audio is requested, wait for audio track OR start after timeout to avoid hanging indefinitely
+        val audioTimeout = (SystemClock.uptimeMillis() - recordStartTimeMs) > 1500L
+        val audioReady = !recordAudio || audioTrackIndex >= 0 || audioTimeout
+
         if (videoReady && audioReady) {
-            mediaMuxer?.start()
-            muxerStarted = true
-            Log.i(tag, "MediaMuxer started with videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex")
+            try {
+                mediaMuxer?.start()
+                muxerStarted = true
+                Log.i(tag, "MediaMuxer started! videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex. Flushing ${pendingBuffers.size} pending buffers.")
+
+                // Flush all pending samples in order
+                for (item in pendingBuffers) {
+                    val track = if (item.isVideo) videoTrackIndex else audioTrackIndex
+                    if (track >= 0 && item.info.size > 0) {
+                        mediaMuxer?.writeSampleData(track, item.buffer, item.info)
+                    }
+                }
+                pendingBuffers.clear()
+            } catch (e: Exception) {
+                Log.e(tag, "Failed to start MediaMuxer", e)
+            }
         }
     }
 
@@ -530,6 +685,8 @@ class DualCompositeRecorder(
         GLES20.glGenTextures(2, textures, 0)
         primaryTexId = textures[0]
         secondaryTexId = textures[1]
+
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
 
         for (tex in textures) {
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, tex)
@@ -713,11 +870,16 @@ class DualCompositeRecorder(
 
             synchronized(muxerLock) {
                 if (muxerStarted) {
-                    mediaMuxer?.stop()
+                    try {
+                        mediaMuxer?.stop()
+                    } catch (e: Exception) {
+                        Log.w(tag, "MediaMuxer stop warning: ${e.message}")
+                    }
                     mediaMuxer?.release()
                     mediaMuxer = null
                     muxerStarted = false
                 }
+                pendingBuffers.clear()
             }
         } catch (e: Exception) {
             Log.e(tag, "Cleanup error", e)

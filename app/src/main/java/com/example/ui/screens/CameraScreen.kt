@@ -94,11 +94,13 @@ fun CameraScreen(
 
     val primaryPreviewView = remember {
         PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
     val secondaryPreviewView = remember {
         PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }

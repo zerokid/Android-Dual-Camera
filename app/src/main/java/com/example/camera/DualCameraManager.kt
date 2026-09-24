@@ -172,12 +172,9 @@ class DualCameraManager(
                         it.setSurfaceProvider(secondaryView.surfaceProvider)
                     }
 
-                    val groupBuilder = UseCaseGroup.Builder().addUseCase(primaryPreview)
-                    videoCapture?.let { groupBuilder.addUseCase(it) }
-
                     val primaryConfig = ConcurrentCamera.SingleCameraConfig(
                         primarySelector,
-                        groupBuilder.build(),
+                        UseCaseGroup.Builder().addUseCase(primaryPreview).build(),
                         lifecycleOwner
                     )
                     val secondaryConfig = ConcurrentCamera.SingleCameraConfig(
