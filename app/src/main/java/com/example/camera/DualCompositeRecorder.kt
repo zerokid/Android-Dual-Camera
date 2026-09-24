@@ -45,8 +45,9 @@ import kotlin.math.log10
 import kotlin.math.sqrt
 
 /**
- * Encodes a unified composite MP4 video file containing BOTH front and back
- * cameras (PIP, Side-by-Side, Top-Down, or 70:30) along with synchronized audio from the microphone.
+ * High-performance, jitter-free composite MP4 video encoder.
+ * Combines BOTH front and back camera feeds (PIP, Side-by-Side, Top-Down, or 70:30)
+ * along with synchronized AAC audio from the microphone at a rock-solid 30.00 FPS.
  */
 class DualCompositeRecorder(
     private val context: Context,
@@ -66,7 +67,7 @@ class DualCompositeRecorder(
     private val muxerLock = Object()
     private var recordStartTimeMs = 0L
 
-    // Pending buffers to prevent dropping initial keyframes before both tracks are registered
+    // Pending buffers to preserve initial keyframes before MediaMuxer starts
     private class PendingBuffer(
         val isVideo: Boolean,
         val buffer: ByteBuffer,
@@ -74,7 +75,7 @@ class DualCompositeRecorder(
     )
     private val pendingBuffers = mutableListOf<PendingBuffer>()
 
-    // Main thread handler for safe UI-thread frame snapshot fallbacks
+    // Main thread handler for fallback frame snapshots
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // Threads
@@ -91,9 +92,27 @@ class DualCompositeRecorder(
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: MediaCodec? = null
 
+    // Zero-allocation reusable bitmaps to eliminate GC thrashing and frame jitter
+    private var primaryReusableBmp: Bitmap? = null
+    private var secondaryReusableBmp: Bitmap? = null
+
     // Cached frames to ensure zero black/blank frames during capture jitter
     private var lastValidPrimary: Bitmap? = null
     private var lastValidSecondary: Bitmap? = null
+
+    // Texture tracking for fast texSubImage2D updates (zero VRAM re-allocations)
+    private var primaryTexAllocated = false
+    private var primaryTexWidth = 0
+    private var primaryTexHeight = 0
+
+    private var secondaryTexAllocated = false
+    private var secondaryTexWidth = 0
+    private var secondaryTexHeight = 0
+
+    // Constant colors for simulated feed
+    private val colorBg = 0xFF0F172A.toInt()
+    private val colorCyan = 0xFF00E5FF.toInt()
+    private val colorCyanDim = 0x3300E5FF.toInt()
 
     // Callbacks
     var onDurationUpdate: ((Int) -> Unit)? = null
@@ -221,7 +240,7 @@ class DualCompositeRecorder(
 
             val pcmBuffer = ByteArray(bufferSize)
             val bufferInfo = MediaCodec.BufferInfo()
-            var startPresentationTimeUs = -1L
+            var totalAudioFrames = 0L
 
             while (isRecording.get()) {
                 if (isPaused.get()) {
@@ -241,16 +260,16 @@ class DualCompositeRecorder(
                     val db = if (rms > 0) (20 * log10(rms)).toFloat().coerceIn(0f, 90f) / 90f else 0f
                     onAudioLevelUpdate?.invoke(db)
 
-                    // Feed PCM into audioEncoder
+                    // Feed PCM into audioEncoder with exact sample-based timestamp
                     val inputIndex = audioEncoder?.dequeueInputBuffer(10000L) ?: -1
                     if (inputIndex >= 0) {
                         val inputBuf = audioEncoder?.getInputBuffer(inputIndex)
                         inputBuf?.clear()
                         inputBuf?.put(pcmBuffer, 0, readBytes)
 
-                        val nowUs = System.nanoTime() / 1000L
-                        if (startPresentationTimeUs < 0) startPresentationTimeUs = nowUs
-                        val presentationTimeUs = nowUs - startPresentationTimeUs
+                        val samples = readBytes / 2 // 16-bit mono = 2 bytes per sample
+                        val presentationTimeUs = (totalAudioFrames * 1_000_000L) / sampleRate
+                        totalAudioFrames += samples
 
                         audioEncoder?.queueInputBuffer(inputIndex, 0, readBytes, presentationTimeUs, 0)
                     }
@@ -333,21 +352,38 @@ class DualCompositeRecorder(
         return null
     }
 
-    private fun capturePreviewFrame(previewView: PreviewView?): Bitmap? {
+    private fun capturePreviewFrame(previewView: PreviewView?, isPrimary: Boolean): Bitmap? {
         if (previewView == null) return null
 
-        // Strategy 1: Direct TextureView snapshot (fast, does not have main-thread requirement)
+        // Strategy 1: Direct TextureView snapshot (zero-allocation by reusing pre-allocated bitmap)
         val tv = findTextureView(previewView)
         if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
             try {
-                val bmp = tv.bitmap
-                if (bmp != null) return bmp
+                if (isPrimary) {
+                    if (primaryReusableBmp == null || primaryReusableBmp?.width != tv.width || primaryReusableBmp?.height != tv.height) {
+                        primaryReusableBmp?.recycle()
+                        primaryReusableBmp = Bitmap.createBitmap(tv.width, tv.height, Bitmap.Config.ARGB_8888)
+                    }
+                    val target = primaryReusableBmp
+                    if (target != null && !target.isRecycled) {
+                        return tv.getBitmap(target)
+                    }
+                } else {
+                    if (secondaryReusableBmp == null || secondaryReusableBmp?.width != tv.width || secondaryReusableBmp?.height != tv.height) {
+                        secondaryReusableBmp?.recycle()
+                        secondaryReusableBmp = Bitmap.createBitmap(tv.width, tv.height, Bitmap.Config.ARGB_8888)
+                    }
+                    val target = secondaryReusableBmp
+                    if (target != null && !target.isRecycled) {
+                        return tv.getBitmap(target)
+                    }
+                }
             } catch (e: Throwable) {
                 Log.w(tag, "TextureView.bitmap capture failed: ${e.message}")
             }
         }
 
-        // Strategy 2: Safe UI-thread snapshot via PreviewView.bitmap
+        // Strategy 2: Safe UI-thread snapshot fallback via PreviewView.bitmap
         var capturedBmp: Bitmap? = null
         val latch = CountDownLatch(1)
         mainHandler.post {
@@ -360,7 +396,7 @@ class DualCompositeRecorder(
             }
         }
         try {
-            latch.await(30, TimeUnit.MILLISECONDS)
+            latch.await(20, TimeUnit.MILLISECONDS)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         }
@@ -383,9 +419,10 @@ class DualCompositeRecorder(
         try {
             val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, 3_500_000)
+                setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
                 setInteger(MediaFormat.KEY_FRAME_RATE, 30)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
+                setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             }
 
             val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
@@ -397,16 +434,20 @@ class DualCompositeRecorder(
             initEgl(inputSurface)
 
             val bufferInfo = MediaCodec.BufferInfo()
-            var startNs = -1L
+            val frameIntervalNs = 1_000_000_000L / 30L // Exactly 33,333,333 ns per frame
             var frameCount = 0L
-            val frameIntervalMs = 1000L / 30L
+            val loopStartNs = System.nanoTime()
 
-            // Fallback placeholder bitmap for initial frames before camera frames arrive
+            // Reset texture allocation trackers
+            primaryTexAllocated = false
+            secondaryTexAllocated = false
+
+            // Fallback placeholder bitmap
             val placeholderPrimaryBitmap = Bitmap.createBitmap(width, height / 2, Bitmap.Config.ARGB_8888).apply {
                 val c = Canvas(this)
-                c.drawColor(Color.parseColor("#111827"))
+                c.drawColor(colorBg)
                 val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.parseColor("#00E5FF")
+                    color = colorCyan
                     textSize = 28f
                     textAlign = Paint.Align.CENTER
                 }
@@ -424,12 +465,11 @@ class DualCompositeRecorder(
                     continue
                 }
 
-                val frameStartMs = SystemClock.uptimeMillis()
-                if (startNs < 0) startNs = System.nanoTime()
-                val presentationTimeNs = System.nanoTime() - startNs
+                // Strictly uniform presentation timestamps for jitter-free playback
+                val presentationTimeNs = frameCount * frameIntervalNs
 
-                // 1. Fetch live primary camera frame with fallback to last valid frame
-                val primaryRaw = capturePreviewFrame(primaryPreviewView)
+                // 1. Fetch live primary camera frame with zero-allocation capture
+                val primaryRaw = capturePreviewFrame(primaryPreviewView, isPrimary = true)
                 if (primaryRaw != null) {
                     lastValidPrimary = primaryRaw
                 }
@@ -437,7 +477,7 @@ class DualCompositeRecorder(
 
                 // 2. Fetch or render secondary camera frame
                 val secBmp = if (isHardwareConcurrent && secondaryPreviewView != null) {
-                    val secRaw = capturePreviewFrame(secondaryPreviewView)
+                    val secRaw = capturePreviewFrame(secondaryPreviewView, isPrimary = false)
                     if (secRaw != null) {
                         lastValidSecondary = secRaw
                         secRaw
@@ -452,7 +492,7 @@ class DualCompositeRecorder(
                     secondaryBitmap
                 }
 
-                // 3. Render both frames into composite OpenGL surface
+                // 3. Render both frames into composite OpenGL surface with sub-image updates
                 renderCompositeFrame(
                     primaryBitmap = primaryBitmap,
                     secondaryBitmap = secBmp,
@@ -460,7 +500,7 @@ class DualCompositeRecorder(
                     pipPosition = pipPosition
                 )
 
-                // 4. Submit frame timestamp to EGL
+                // 4. Submit exact frame timestamp to EGL
                 EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, presentationTimeNs)
                 EGL14.eglSwapBuffers(eglDisplay, eglSurface)
 
@@ -472,11 +512,12 @@ class DualCompositeRecorder(
                 // 5. Drain encoded video buffers and write to muxer
                 drainVideoEncoder(bufferInfo, recordAudio)
 
-                // Regulate frame rate (~30fps)
-                val elapsed = SystemClock.uptimeMillis() - frameStartMs
-                val sleepTime = frameIntervalMs - elapsed
-                if (sleepTime > 0) {
-                    SystemClock.sleep(sleepTime)
+                // Regulate frame rate based on absolute target clock to prevent drift
+                val targetNextNs = loopStartNs + frameCount * frameIntervalNs
+                val nowNs = System.nanoTime()
+                val sleepNs = targetNextNs - nowNs
+                if (sleepNs > 1_500_000L) {
+                    SystemClock.sleep(sleepNs / 1_000_000L)
                 }
             }
 
@@ -528,7 +569,7 @@ class DualCompositeRecorder(
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
                                 mediaMuxer?.writeSampleData(videoTrackIndex, encodedData, bufferInfo)
                             } else {
-                                // Crucial: Buffer initial keyframe and early video frames so they are NOT dropped!
+                                // Buffer initial keyframe and early video frames so they are NOT dropped!
                                 val copy = ByteBuffer.allocateDirect(bufferInfo.size)
                                 encodedData.position(bufferInfo.offset)
                                 encodedData.limit(bufferInfo.offset + bufferInfo.size)
@@ -554,7 +595,6 @@ class DualCompositeRecorder(
     private fun checkStartMuxerLocked(recordAudio: Boolean) {
         if (muxerStarted) return
         val videoReady = videoTrackIndex >= 0
-        // If audio is requested, wait for audio track OR start after timeout to avoid hanging indefinitely
         val audioTimeout = (SystemClock.uptimeMillis() - recordStartTimeMs) > 1500L
         val audioReady = !recordAudio || audioTrackIndex >= 0 || audioTimeout
 
@@ -720,18 +760,32 @@ class DualCompositeRecorder(
         GLES20.glEnableVertexAttribArray(aTexCoordHandle)
         GLES20.glVertexAttribPointer(aTexCoordHandle, 2, GLES20.GL_FLOAT, false, 8, texCoordBuffer)
 
-        // Upload primary bitmap
+        // Upload primary bitmap with sub-image update to avoid GPU re-allocation
         if (primaryBitmap != null && !primaryBitmap.isRecycled) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, primaryTexId)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, primaryBitmap, 0)
+            if (!primaryTexAllocated || primaryTexWidth != primaryBitmap.width || primaryTexHeight != primaryBitmap.height) {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, primaryBitmap, 0)
+                primaryTexAllocated = true
+                primaryTexWidth = primaryBitmap.width
+                primaryTexHeight = primaryBitmap.height
+            } else {
+                GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, primaryBitmap)
+            }
         }
 
-        // Upload secondary bitmap
+        // Upload secondary bitmap with sub-image update
         if (secondaryBitmap != null && !secondaryBitmap.isRecycled) {
             GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, secondaryTexId)
-            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, secondaryBitmap, 0)
+            if (!secondaryTexAllocated || secondaryTexWidth != secondaryBitmap.width || secondaryTexHeight != secondaryBitmap.height) {
+                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, secondaryBitmap, 0)
+                secondaryTexAllocated = true
+                secondaryTexWidth = secondaryBitmap.width
+                secondaryTexHeight = secondaryBitmap.height
+            } else {
+                GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, secondaryBitmap)
+            }
         }
 
         when (splitMode) {
@@ -806,10 +860,10 @@ class DualCompositeRecorder(
         val h = bitmap.height.toFloat()
 
         // Background
-        canvas.drawColor(Color.parseColor("#0F172A"))
+        canvas.drawColor(colorBg)
 
         // Crosshair lines
-        paint.color = Color.parseColor("#3300E5FF")
+        paint.color = colorCyanDim
         paint.strokeWidth = 2f
         canvas.drawLine(w * 0.5f, h * 0.2f, w * 0.5f, h * 0.8f, paint)
         canvas.drawLine(w * 0.2f, h * 0.5f, w * 0.8f, h * 0.5f, paint)
@@ -817,7 +871,7 @@ class DualCompositeRecorder(
         // Pulsing reticle circle
         val pulse = (kotlin.math.sin(frameCount * 0.1) * 8.0).toFloat()
         paint.style = Paint.Style.STROKE
-        paint.color = Color.parseColor("#00E5FF")
+        paint.color = colorCyan
         paint.strokeWidth = 3f
         canvas.drawCircle(w * 0.5f, h * 0.5f, 60f + pulse, paint)
 
@@ -844,7 +898,7 @@ class DualCompositeRecorder(
         canvas.drawText(label, w * 0.5f, h * 0.5f + 110f, paint)
 
         paint.textSize = 20f
-        paint.color = Color.parseColor("#00E5FF")
+        paint.color = colorCyan
         canvas.drawText("SYNCED AUDIO & COMPOSITE RECORDER", w * 0.5f, h * 0.5f + 140f, paint)
     }
 
@@ -881,6 +935,11 @@ class DualCompositeRecorder(
                 }
                 pendingBuffers.clear()
             }
+
+            primaryReusableBmp?.recycle()
+            primaryReusableBmp = null
+            secondaryReusableBmp?.recycle()
+            secondaryReusableBmp = null
         } catch (e: Exception) {
             Log.e(tag, "Cleanup error", e)
         }

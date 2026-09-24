@@ -49,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -142,19 +143,6 @@ fun CameraScreen(
                 onBound = {}
             )
         }
-    }
-
-    // Rebind viewfinders seamlessly whenever layout split mode changes
-    LaunchedEffect(uiState.splitMode) {
-        val manager = viewModel.cameraManager ?: return@LaunchedEffect
-        // Short frame delay to allow Compose layout hierarchy to complete attachment
-        kotlinx.coroutines.delay(60)
-        manager.bindViewfinders(
-            primaryView = primaryPreviewView,
-            secondaryView = if (uiState.isHardwareConcurrent) secondaryPreviewView else null,
-            primaryLens = uiState.primaryLens,
-            onBound = {}
-        )
     }
 
     LaunchedEffect(uiState.zoomRatio, uiState.isZooming) {
@@ -378,63 +366,113 @@ fun ViewfinderContainer(
     onCyclePip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    when (uiState.splitMode) {
-        SplitLayoutMode.VERTICAL_SPLIT -> {
-            VerticalSplitLayout(
-                uiState = uiState,
-                primaryPreviewView = primaryPreviewView,
-                secondaryPreviewView = secondaryPreviewView,
-                onSwap = onSwap,
-                modifier = modifier
-            )
-        }
-        SplitLayoutMode.HORIZONTAL_SPLIT -> {
-            HorizontalSplitLayout(
-                uiState = uiState,
-                primaryPreviewView = primaryPreviewView,
-                secondaryPreviewView = secondaryPreviewView,
-                onSwap = onSwap,
-                modifier = modifier
-            )
-        }
-        SplitLayoutMode.PIP -> {
-            PipLayout(
-                uiState = uiState,
-                primaryPreviewView = primaryPreviewView,
-                secondaryPreviewView = secondaryPreviewView,
-                onSwap = onSwap,
-                onCyclePip = onCyclePip,
-                modifier = modifier
-            )
-        }
-        SplitLayoutMode.FOCUS_70_30 -> {
-            Focus7030Layout(
-                uiState = uiState,
-                primaryPreviewView = primaryPreviewView,
-                secondaryPreviewView = secondaryPreviewView,
-                onSwap = onSwap,
-                modifier = modifier
-            )
-        }
-    }
-}
-
-@Composable
-fun VerticalSplitLayout(
-    uiState: DualCamUiState,
-    primaryPreviewView: PreviewView,
-    secondaryPreviewView: PreviewView,
-    onSwap: () -> Unit,
-    modifier: Modifier = Modifier
-) {
     val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
+    val isHardwareConcurrent = uiState.isHardwareConcurrent
+    val splitMode = uiState.splitMode
 
-    Column(modifier = modifier.testTag("vertical_split_layout")) {
-        // Top slot (Primary)
+    BoxWithConstraints(
+        modifier = modifier.testTag(
+            when (splitMode) {
+                SplitLayoutMode.VERTICAL_SPLIT -> "vertical_split_layout"
+                SplitLayoutMode.HORIZONTAL_SPLIT -> "horizontal_split_layout"
+                SplitLayoutMode.PIP -> "pip_layout"
+                SplitLayoutMode.FOCUS_70_30 -> "focus_70_30_layout"
+            }
+        )
+    ) {
+        val totalWidth = maxWidth
+        val totalHeight = maxHeight
+        val dividerThickness = 4.dp
+
+        // Primary Surface Container Modifier
+        val primaryModifier = when (splitMode) {
+            SplitLayoutMode.VERTICAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .size(totalWidth, (totalHeight - dividerThickness) / 2)
+            }
+            SplitLayoutMode.HORIZONTAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .size((totalWidth - dividerThickness) / 2, totalHeight)
+            }
+            SplitLayoutMode.PIP -> {
+                Modifier.fillMaxSize()
+            }
+            SplitLayoutMode.FOCUS_70_30 -> {
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .size(totalWidth, (totalHeight - dividerThickness) * 0.7f)
+            }
+        }
+
+        // Secondary Surface Container Modifier
+        val secondaryModifier = when (splitMode) {
+            SplitLayoutMode.VERTICAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .size(totalWidth, (totalHeight - dividerThickness) / 2)
+            }
+            SplitLayoutMode.HORIZONTAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .size((totalWidth - dividerThickness) / 2, totalHeight)
+            }
+            SplitLayoutMode.PIP -> {
+                val pipAlignment = when (uiState.pipPosition) {
+                    PipPosition.TOP_RIGHT -> Alignment.TopEnd
+                    PipPosition.TOP_LEFT -> Alignment.TopStart
+                    PipPosition.BOTTOM_RIGHT -> Alignment.BottomEnd
+                    PipPosition.BOTTOM_LEFT -> Alignment.BottomStart
+                }
+                Modifier
+                    .align(pipAlignment)
+                    .padding(
+                        top = if (pipAlignment == Alignment.TopEnd || pipAlignment == Alignment.TopStart) 110.dp else 0.dp,
+                        bottom = if (pipAlignment == Alignment.BottomEnd || pipAlignment == Alignment.BottomStart) 150.dp else 0.dp,
+                        start = 16.dp,
+                        end = 16.dp
+                    )
+                    .size(width = 120.dp, height = 170.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(2.dp, CyberCyan, RoundedCornerShape(16.dp))
+                    .clickable { onCyclePip() }
+                    .testTag("pip_window")
+            }
+            SplitLayoutMode.FOCUS_70_30 -> {
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .size(totalWidth, (totalHeight - dividerThickness) * 0.3f)
+            }
+        }
+
+        // Sleek Divider Modifier (for split modes)
+        val dividerModifier = when (splitMode) {
+            SplitLayoutMode.VERTICAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.Center)
+                    .size(totalWidth, dividerThickness)
+                    .background(CyberCyan)
+            }
+            SplitLayoutMode.HORIZONTAL_SPLIT -> {
+                Modifier
+                    .align(Alignment.Center)
+                    .size(dividerThickness, totalHeight)
+                    .background(CyberCyan)
+            }
+            SplitLayoutMode.FOCUS_70_30 -> {
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = (totalHeight - dividerThickness) * 0.7f)
+                    .size(totalWidth, dividerThickness)
+                    .background(CyberCyan)
+            }
+            SplitLayoutMode.PIP -> null
+        }
+
+        // --- 1. Persistent Primary Preview (Always retained in composition) ---
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
+            modifier = primaryModifier.clipToBounds()
         ) {
             CameraPreviewSurface(
                 previewView = primaryPreviewView,
@@ -446,25 +484,23 @@ fun VerticalSplitLayout(
                 isPrimary = true,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(12.dp)
+                    .padding(
+                        start = if (splitMode == SplitLayoutMode.PIP) 16.dp else 12.dp,
+                        bottom = if (splitMode == SplitLayoutMode.PIP) 120.dp else 12.dp
+                    )
             )
         }
 
-        // Sleek Split Divider
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .background(CyberCyan)
-        )
+        // --- 2. Sleek Split Divider ---
+        if (dividerModifier != null) {
+            Box(modifier = dividerModifier)
+        }
 
-        // Bottom slot (Secondary)
+        // --- 3. Persistent Secondary Preview / Director Feed (Always retained in composition) ---
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
+            modifier = if (splitMode != SplitLayoutMode.PIP) secondaryModifier.clipToBounds() else secondaryModifier
         ) {
-            if (uiState.isHardwareConcurrent) {
+            if (isHardwareConcurrent) {
                 CameraPreviewSurface(
                     previewView = secondaryPreviewView,
                     modifier = Modifier.fillMaxSize()
@@ -480,216 +516,8 @@ fun VerticalSplitLayout(
                 lens = uiState.secondaryLens,
                 isPrimary = false,
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun HorizontalSplitLayout(
-    uiState: DualCamUiState,
-    primaryPreviewView: PreviewView,
-    secondaryPreviewView: PreviewView,
-    onSwap: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
-
-    Row(modifier = modifier.testTag("horizontal_split_layout")) {
-        // Left Slot
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .weight(1f)
-        ) {
-            CameraPreviewSurface(
-                previewView = primaryPreviewView,
-                zoomScale = digitalZoomFallback,
-                modifier = Modifier.fillMaxSize()
-            )
-            LensSlotBadge(
-                lens = uiState.primaryLens,
-                isPrimary = true,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp)
-            )
-        }
-
-        // Center Divider
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(4.dp)
-                .background(CyberCyan)
-        )
-
-        // Right Slot
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .weight(1f)
-        ) {
-            if (uiState.isHardwareConcurrent) {
-                CameraPreviewSurface(
-                    previewView = secondaryPreviewView,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                SimulatedDirectorFeed(
-                    lensFacing = uiState.secondaryLens,
-                    onTapToSwap = onSwap,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            LensSlotBadge(
-                lens = uiState.secondaryLens,
-                isPrimary = false,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun PipLayout(
-    uiState: DualCamUiState,
-    primaryPreviewView: PreviewView,
-    secondaryPreviewView: PreviewView,
-    onSwap: () -> Unit,
-    onCyclePip: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
-
-    Box(modifier = modifier.testTag("pip_layout")) {
-        // Fullscreen main camera
-        CameraPreviewSurface(
-            previewView = primaryPreviewView,
-            zoomScale = digitalZoomFallback,
-            modifier = Modifier.fillMaxSize()
-        )
-        LensSlotBadge(
-            lens = uiState.primaryLens,
-            isPrimary = true,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 120.dp)
-        )
-
-        // Floating PiP Window
-        val pipAlignment = when (uiState.pipPosition) {
-            PipPosition.TOP_RIGHT -> Alignment.TopEnd
-            PipPosition.TOP_LEFT -> Alignment.TopStart
-            PipPosition.BOTTOM_RIGHT -> Alignment.BottomEnd
-            PipPosition.BOTTOM_LEFT -> Alignment.BottomStart
-        }
-
-        Box(
-            modifier = Modifier
-                .align(pipAlignment)
-                .padding(
-                    top = if (pipAlignment == Alignment.TopEnd || pipAlignment == Alignment.TopStart) 110.dp else 0.dp,
-                    bottom = if (pipAlignment == Alignment.BottomEnd || pipAlignment == Alignment.BottomStart) 150.dp else 0.dp,
-                    start = 16.dp,
-                    end = 16.dp
-                )
-                .size(width = 120.dp, height = 170.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .border(2.dp, CyberCyan, RoundedCornerShape(16.dp))
-                .clickable { onCyclePip() }
-                .testTag("pip_window")
-        ) {
-            if (uiState.isHardwareConcurrent) {
-                CameraPreviewSurface(
-                    previewView = secondaryPreviewView,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                SimulatedDirectorFeed(
-                    lensFacing = uiState.secondaryLens,
-                    onTapToSwap = onSwap,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            LensSlotBadge(
-                lens = uiState.secondaryLens,
-                isPrimary = false,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(6.dp)
-            )
-        }
-    }
-}
-
-@Composable
-fun Focus7030Layout(
-    uiState: DualCamUiState,
-    primaryPreviewView: PreviewView,
-    secondaryPreviewView: PreviewView,
-    onSwap: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
-
-    Column(modifier = modifier.testTag("focus_70_30_layout")) {
-        // Main focus slot (70% height)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.7f)
-        ) {
-            CameraPreviewSurface(
-                previewView = primaryPreviewView,
-                zoomScale = digitalZoomFallback,
-                modifier = Modifier.fillMaxSize()
-            )
-            LensSlotBadge(
-                lens = uiState.primaryLens,
-                isPrimary = true,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp)
-            )
-        }
-
-        // Accent divider
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .background(CyberCyan)
-        )
-
-        // Reaction slot (30% height)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(0.3f)
-        ) {
-            if (uiState.isHardwareConcurrent) {
-                CameraPreviewSurface(
-                    previewView = secondaryPreviewView,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                SimulatedDirectorFeed(
-                    lensFacing = uiState.secondaryLens,
-                    onTapToSwap = onSwap,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-            LensSlotBadge(
-                lens = uiState.secondaryLens,
-                isPrimary = false,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(12.dp)
+                    .align(if (splitMode == SplitLayoutMode.PIP) Alignment.TopStart else Alignment.BottomStart)
+                    .padding(if (splitMode == SplitLayoutMode.PIP) 6.dp else 12.dp)
             )
         }
     }
