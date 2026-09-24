@@ -1,0 +1,6 @@
+{
+  "name": "DualCam",
+  "description": "Dual-camera split-screen video recording app with simultaneous front and back camera preview, multiple split layouts, and video library.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

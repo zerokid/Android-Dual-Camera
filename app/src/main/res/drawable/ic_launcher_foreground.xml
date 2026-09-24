@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Top Camera Viewfinder Window (Front Camera) -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 33,26 L 75,26 C 78.3,26 81,28.7 81,32 L 81,49 C 81,50.7 79.7,52 78,52 L 30,52 C 28.3,52 27,50.7 27,49 L 27,32 C 27,28.7 29.7,26 33,26 Z" />
+    
+    <!-- Top lens aperture (white center) -->
+    <path
+        android:fillColor="#0D1117"
+        android:pathData="M 54,39 m -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54,39 m -4,0 a 4,4 0 1,0 8,0 a 4,4 0 1,0 -8,0" />
+    <!-- Small front selfie dot indicator -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M 52.5,37.5 m -1.5,0 a 1.5,1.5 0 1,0 3,0 a 1.5,1.5 0 1,0 -3,0" />
+
+    <!-- Split Divider Line with Recording Indicator -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 27,53 L 81,53 L 81,55 L 27,55 Z" />
+
+    <!-- Bottom Camera Viewfinder Window (Back Camera) -->
+    <path
+        android:fillColor="#FF2E63"
+        android:pathData="M 27,56 C 27,54.3 28.3,56 30,56 L 78,56 C 79.7,56 81,54.3 81,56 L 81,76 C 81,79.3 78.3,82 75,82 L 33,82 C 29.7,82 27,79.3 27,76 Z" />
+    
+    <!-- Bottom big pro lens -->
+    <path
+        android:fillColor="#0D1117"
+        android:pathData="M 54,69 m -8,0 a 8,8 0 1,0 16,0 a 8,8 0 1,0 -16,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 54,69 m -4,0 a 4,4 0 1,0 8,0 a 4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#FF2E63"
+        android:pathData="M 54,69 m -2,0 a 2,2 0 1,0 4,0 a 2,2 0 1,0 -4,0" />
+
+    <!-- Dual Cam active record dot badge on side -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 73,34 m -2.5,0 a 2.5,2.5 0 1,0 5,0 a 2.5,2.5 0 1,0 -5,0" />
+    <path
+        android:fillColor="#FF2E63"
+        android:pathData="M 73,74 m -2.5,0 a 2.5,2.5 0 1,0 5,0 a 2.5,2.5 0 1,0 -5,0" />
+</vector>
