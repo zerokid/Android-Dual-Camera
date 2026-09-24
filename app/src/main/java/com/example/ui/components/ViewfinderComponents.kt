@@ -44,6 +44,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,11 +61,19 @@ import com.example.ui.theme.RecordRed
 @Composable
 fun CameraPreviewSurface(
     previewView: PreviewView,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    zoomScale: Float = 1.0f
 ) {
     AndroidView(
         factory = { previewView },
-        modifier = modifier.testTag("camera_preview_surface")
+        modifier = modifier
+            .testTag("camera_preview_surface")
+            .graphicsLayer {
+                if (zoomScale > 1.0f) {
+                    scaleX = zoomScale
+                    scaleY = zoomScale
+                }
+            }
     )
 }
 

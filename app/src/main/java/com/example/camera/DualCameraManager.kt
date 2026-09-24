@@ -59,6 +59,11 @@ class DualCameraManager(
     private var currentPrimaryLens: LensFacing = LensFacing.BACK
     private var isTorchOn: Boolean = false
 
+    var onZoomStateUpdated: ((min: Float, max: Float, current: Float) -> Unit)? = null
+
+    val primaryCamera: Camera?
+        get() = activeCamera ?: concurrentCamera?.cameras?.firstOrNull()
+
     fun init(onReady: (HardwareDualCameraInfo) -> Unit) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
@@ -183,6 +188,7 @@ class DualCameraManager(
 
                     concurrentCamera = provider.bindToLifecycle(listOf(primaryConfig, secondaryConfig))
                     Log.i(tag, "Successfully bound hardware concurrent cameras!")
+                    setupZoomStateObserver()
                     onBound(true)
                     return
                 } catch (e: Exception) {
@@ -211,10 +217,30 @@ class DualCameraManager(
             }
 
             Log.i(tag, "Bound active camera lens: $primaryLens")
+            setupZoomStateObserver()
             onBound(false)
         } catch (e: Exception) {
             Log.e(tag, "Error binding camera viewfinders", e)
             onBound(false)
+        }
+    }
+
+    private fun setupZoomStateObserver() {
+        val cam = primaryCamera ?: return
+        try {
+            val liveZoom = cam.cameraInfo.zoomState.value
+            val min = liveZoom?.minZoomRatio ?: 1.0f
+            val max = liveZoom?.maxZoomRatio ?: 8.0f
+            val cur = liveZoom?.zoomRatio ?: 1.0f
+            onZoomStateUpdated?.invoke(min, max, cur)
+
+            cam.cameraInfo.zoomState.observe(lifecycleOwner) { state ->
+                if (state != null) {
+                    onZoomStateUpdated?.invoke(state.minZoomRatio, state.maxZoomRatio, state.zoomRatio)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to observe zoom state: ${e.message}")
         }
     }
 
@@ -340,18 +366,31 @@ class DualCameraManager(
     fun toggleTorch(enabled: Boolean) {
         isTorchOn = enabled
         if (currentPrimaryLens == LensFacing.BACK) {
-            activeCamera?.cameraControl?.enableTorch(enabled)
+            primaryCamera?.cameraControl?.enableTorch(enabled)
         }
     }
 
     fun setZoom(ratio: Float) {
-        activeCamera?.cameraControl?.setZoomRatio(ratio)
+        val cam = primaryCamera ?: run {
+            Log.w(tag, "Cannot setZoom: primaryCamera is null")
+            return
+        }
+        try {
+            val zoomState = cam.cameraInfo.zoomState.value
+            val min = zoomState?.minZoomRatio ?: 1.0f
+            val max = zoomState?.maxZoomRatio ?: 8.0f
+            val clamped = ratio.coerceIn(min, max)
+            cam.cameraControl.setZoomRatio(clamped)
+            Log.i(tag, "Applied zoom: $clamped (range: $min - $max)")
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to apply zoom $ratio", e)
+        }
     }
 
     fun getZoomRange(): Pair<Float, Float> {
-        val zoomState = activeCamera?.cameraInfo?.zoomState?.value
+        val zoomState = primaryCamera?.cameraInfo?.zoomState?.value
         val min = zoomState?.minZoomRatio ?: 1.0f
-        val max = (zoomState?.maxZoomRatio ?: 5.0f).coerceAtMost(8.0f)
+        val max = (zoomState?.maxZoomRatio ?: 8.0f).coerceAtMost(10.0f)
         return Pair(min, max)
     }
 }

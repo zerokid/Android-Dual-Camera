@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -49,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -71,6 +73,7 @@ import com.example.ui.components.ShutterButton
 import com.example.ui.components.SimulatedDirectorFeed
 import com.example.ui.components.SpecsDialog
 import com.example.ui.components.TopControlBar
+import com.example.ui.components.ZoomHudBadge
 import com.example.ui.components.ZoomQuickBar
 import com.example.ui.theme.AccentAmber
 import com.example.ui.theme.BorderGlass
@@ -139,20 +142,35 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(uiState.zoomRatio, uiState.isZooming) {
+        if (uiState.isZooming) {
+            kotlinx.coroutines.delay(1800)
+            viewModel.dismissZoomHud()
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(DarkBackground)
             .testTag("camera_screen")
     ) {
-        // --- Split Screen Viewfinders Area ---
+        // --- Split Screen Viewfinders Area with Pinch-to-Zoom Gesture ---
         ViewfinderContainer(
             uiState = uiState,
             primaryPreviewView = primaryPreviewView,
             secondaryPreviewView = secondaryPreviewView,
             onSwap = { performSwap() },
             onCyclePip = { viewModel.cyclePipPosition() },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, _, zoomChange, _ ->
+                        if (zoomChange != 1.0f) {
+                            viewModel.applyZoomDelta(zoomChange)
+                        }
+                    }
+                }
         )
 
         // --- Grid Lines Overlay ---
@@ -162,6 +180,15 @@ fun CameraScreen(
 
         // --- Filter Color Tint ---
         FilterColorOverlay(filter = uiState.selectedFilter, modifier = Modifier.fillMaxSize())
+
+        // --- Floating Zoom Level HUD (Pinch or Button Feedback) ---
+        ZoomHudBadge(
+            zoomRatio = uiState.zoomRatio,
+            visible = uiState.isZooming,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(bottom = 40.dp)
+        )
 
         // --- Top Bar Controls ---
         Column(
@@ -202,10 +229,13 @@ fun CameraScreen(
                 .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Zoom Selector
+            // Zoom Selector with +/- Step and Dynamic Presets
             ZoomQuickBar(
                 currentZoom = uiState.zoomRatio,
+                minZoom = uiState.minZoomRatio,
+                maxZoom = uiState.maxZoomRatio,
                 onSelectZoom = { zoom -> viewModel.setZoom(zoom) },
+                onStepZoom = { delta -> viewModel.stepZoom(delta) },
                 modifier = Modifier.padding(bottom = 10.dp)
             )
 
@@ -382,6 +412,8 @@ fun VerticalSplitLayout(
     onSwap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
+
     Column(modifier = modifier.testTag("vertical_split_layout")) {
         // Top slot (Primary)
         Box(
@@ -391,6 +423,7 @@ fun VerticalSplitLayout(
         ) {
             CameraPreviewSurface(
                 previewView = primaryPreviewView,
+                zoomScale = digitalZoomFallback,
                 modifier = Modifier.fillMaxSize()
             )
             LensSlotBadge(
@@ -447,6 +480,8 @@ fun HorizontalSplitLayout(
     onSwap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
+
     Row(modifier = modifier.testTag("horizontal_split_layout")) {
         // Left Slot
         Box(
@@ -456,6 +491,7 @@ fun HorizontalSplitLayout(
         ) {
             CameraPreviewSurface(
                 previewView = primaryPreviewView,
+                zoomScale = digitalZoomFallback,
                 modifier = Modifier.fillMaxSize()
             )
             LensSlotBadge(
@@ -513,10 +549,13 @@ fun PipLayout(
     onCyclePip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
+
     Box(modifier = modifier.testTag("pip_layout")) {
         // Fullscreen main camera
         CameraPreviewSurface(
             previewView = primaryPreviewView,
+            zoomScale = digitalZoomFallback,
             modifier = Modifier.fillMaxSize()
         )
         LensSlotBadge(
@@ -581,6 +620,8 @@ fun Focus7030Layout(
     onSwap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val digitalZoomFallback = if (uiState.maxZoomRatio > 1.05f) 1.0f else uiState.zoomRatio
+
     Column(modifier = modifier.testTag("focus_70_30_layout")) {
         // Main focus slot (70% height)
         Box(
@@ -590,6 +631,7 @@ fun Focus7030Layout(
         ) {
             CameraPreviewSurface(
                 previewView = primaryPreviewView,
+                zoomScale = digitalZoomFallback,
                 modifier = Modifier.fillMaxSize()
             )
             LensSlotBadge(

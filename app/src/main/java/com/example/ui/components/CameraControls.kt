@@ -393,35 +393,137 @@ fun LayoutModeBar(
 }
 
 @Composable
-fun ZoomQuickBar(
-    currentZoom: Float,
-    onSelectZoom: (Float) -> Unit,
+fun ZoomHudBadge(
+    zoomRatio: Float,
+    visible: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val presets = listOf(0.5f, 1.0f, 2.0f)
-    Row(
+    AnimatedVisibility(
+        visible = visible,
+        enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(),
+        exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(),
         modifier = modifier
-            .background(Color(0x99000000), CircleShape)
-            .padding(horizontal = 4.dp, vertical = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        presets.forEach { zoom ->
-            val isSelected = (currentZoom - zoom).let { kotlin.math.abs(it) < 0.15f }
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xDD001A22),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, CyberCyan),
+            shadowElevation = 8.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(CyberCyan, CircleShape)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = String.format("%.1fx ZOOM", zoomRatio),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    ),
+                    color = CyberCyan
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ZoomQuickBar(
+    currentZoom: Float,
+    minZoom: Float = 1.0f,
+    maxZoom: Float = 8.0f,
+    onSelectZoom: (Float) -> Unit,
+    onStepZoom: (Float) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    // Generate valid presets based on hardware range
+    val allPossible = listOf(0.5f, 0.6f, 1.0f, 2.0f, 3.0f, 5.0f, 8.0f)
+    val presets = allPossible.filter { it in minZoom..maxZoom }.toMutableList()
+    if (!presets.contains(1.0f) && 1.0f in minZoom..maxZoom) {
+        presets.add(1.0f)
+        presets.sort()
+    }
+    if (presets.isEmpty()) {
+        presets.addAll(listOf(1.0f, 2.0f, 4.0f))
+    }
+
+    Surface(
+        shape = CircleShape,
+        color = Color(0xCC0D131D),
+        border = androidx.compose.foundation.BorderStroke(1.dp, BorderGlass),
+        modifier = modifier.testTag("zoom_quick_bar")
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Zoom Out Step Button (-)
             Surface(
                 shape = CircleShape,
-                color = if (isSelected) CyberCyan else Color.Transparent,
+                color = Color(0x33FFFFFF),
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(28.dp)
                     .clip(CircleShape)
-                    .clickable { onSelectZoom(zoom) }
+                    .clickable { onStepZoom(-0.5f) }
+                    .testTag("zoom_minus_button")
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = "${zoom}x",
-                        fontSize = 10.sp,
+                        text = "−",
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (isSelected) Color.Black else Color.White
+                        color = Color.White
+                    )
+                }
+            }
+
+            // Quick Preset Buttons
+            presets.take(4).forEach { zoom ->
+                val isSelected = (currentZoom - zoom).let { kotlin.math.abs(it) < 0.2f }
+                Surface(
+                    shape = CircleShape,
+                    color = if (isSelected) CyberCyan else Color.Transparent,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .clickable { onSelectZoom(zoom) }
+                        .testTag("zoom_preset_${zoom}x")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = if (zoom == 0.5f || zoom == 0.6f) ".5" else "${zoom.toInt()}x",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) Color(0xFF00252C) else Color.White
+                        )
+                    }
+                }
+            }
+
+            // Zoom In Step Button (+)
+            Surface(
+                shape = CircleShape,
+                color = Color(0x33FFFFFF),
+                modifier = Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable { onStepZoom(+0.5f) }
+                    .testTag("zoom_plus_button")
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "+",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
                     )
                 }
             }

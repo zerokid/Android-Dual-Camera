@@ -40,6 +40,9 @@ data class DualCamUiState(
     val gridLinesEnabled: Boolean = false,
     val selectedFilter: VideoFilter = VideoFilter.NORMAL,
     val zoomRatio: Float = 1.0f,
+    val minZoomRatio: Float = 1.0f,
+    val maxZoomRatio: Float = 8.0f,
+    val isZooming: Boolean = false,
     val splitRatio: Float = 0.5f,
     val pipPosition: PipPosition = PipPosition.BOTTOM_RIGHT,
     val showSpecsDialog: Boolean = false,
@@ -61,12 +64,30 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
         )
 
     var cameraManager: DualCameraManager? = null
+        set(value) {
+            field = value
+            value?.onZoomStateUpdated = { min, max, current ->
+                updateZoomBounds(min, max, current)
+            }
+        }
 
     fun setHardwareInfo(info: HardwareDualCameraInfo) {
         _uiState.update {
             it.copy(
                 isHardwareConcurrent = info.isConcurrentSupported,
                 hardwareInfo = info
+            )
+        }
+    }
+
+    fun updateZoomBounds(min: Float, max: Float, current: Float) {
+        val safeMin = min.coerceAtLeast(0.5f)
+        val safeMax = max.coerceAtLeast(safeMin)
+        _uiState.update {
+            it.copy(
+                minZoomRatio = safeMin,
+                maxZoomRatio = safeMax,
+                zoomRatio = it.zoomRatio.coerceIn(safeMin, safeMax)
             )
         }
     }
@@ -108,8 +129,26 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setZoom(ratio: Float) {
-        _uiState.update { it.copy(zoomRatio = ratio) }
-        cameraManager?.setZoom(ratio)
+        val state = _uiState.value
+        val clamped = (Math.round(ratio * 10f) / 10f).coerceIn(state.minZoomRatio, state.maxZoomRatio)
+        _uiState.update { it.copy(zoomRatio = clamped, isZooming = true) }
+        cameraManager?.setZoom(clamped)
+    }
+
+    fun applyZoomDelta(factor: Float) {
+        val state = _uiState.value
+        val target = state.zoomRatio * factor
+        setZoom(target)
+    }
+
+    fun stepZoom(delta: Float) {
+        val state = _uiState.value
+        val target = state.zoomRatio + delta
+        setZoom(target)
+    }
+
+    fun dismissZoomHud() {
+        _uiState.update { it.copy(isZooming = false) }
     }
 
     fun setSplitRatio(ratio: Float) {
