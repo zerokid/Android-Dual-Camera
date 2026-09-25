@@ -92,9 +92,15 @@ class DualCompositeRecorder(
     private var audioRecord: AudioRecord? = null
     private var audioEncoder: MediaCodec? = null
 
-    // Zero-allocation reusable bitmaps to eliminate GC thrashing and frame jitter
-    private var primaryReusableBmp: Bitmap? = null
-    private var secondaryReusableBmp: Bitmap? = null
+    // Thread-safe non-blocking asynchronous snapshot state
+    private val frameLock = Object()
+    @Volatile private var latestPrimaryBitmap: Bitmap? = null
+    @Volatile private var pendingRecyclePrimary: Bitmap? = null
+    @Volatile private var isCapturingPrimary = false
+
+    @Volatile private var latestSecondaryBitmap: Bitmap? = null
+    @Volatile private var pendingRecycleSecondary: Bitmap? = null
+    @Volatile private var isCapturingSecondary = false
 
     // Cached frames to ensure zero black/blank frames during capture jitter
     private var lastValidPrimary: Bitmap? = null
@@ -339,69 +345,54 @@ class DualCompositeRecorder(
         }
     }
 
-    private fun findTextureView(view: View?): TextureView? {
-        if (view == null) return null
-        if (view is TextureView) return view
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                val child = view.getChildAt(i)
-                val tv = findTextureView(child)
-                if (tv != null) return tv
-            }
-        }
-        return null
-    }
-
     private fun capturePreviewFrame(previewView: PreviewView?, isPrimary: Boolean): Bitmap? {
         if (previewView == null) return null
 
-        // Strategy 1: Direct TextureView snapshot (zero-allocation by reusing pre-allocated bitmap)
-        val tv = findTextureView(previewView)
-        if (tv != null && tv.isAvailable && tv.width > 0 && tv.height > 0) {
-            try {
-                if (isPrimary) {
-                    if (primaryReusableBmp == null || primaryReusableBmp?.width != tv.width || primaryReusableBmp?.height != tv.height) {
-                        primaryReusableBmp?.recycle()
-                        primaryReusableBmp = Bitmap.createBitmap(tv.width, tv.height, Bitmap.Config.ARGB_8888)
-                    }
-                    val target = primaryReusableBmp
-                    if (target != null && !target.isRecycled) {
-                        return tv.getBitmap(target)
-                    }
-                } else {
-                    if (secondaryReusableBmp == null || secondaryReusableBmp?.width != tv.width || secondaryReusableBmp?.height != tv.height) {
-                        secondaryReusableBmp?.recycle()
-                        secondaryReusableBmp = Bitmap.createBitmap(tv.width, tv.height, Bitmap.Config.ARGB_8888)
-                    }
-                    val target = secondaryReusableBmp
-                    if (target != null && !target.isRecycled) {
-                        return tv.getBitmap(target)
+        if (isPrimary) {
+            if (!isCapturingPrimary && isRecording.get()) {
+                isCapturingPrimary = true
+                mainHandler.post {
+                    try {
+                        if (!isRecording.get()) return@post
+                        val bmp = previewView.bitmap ?: return@post
+                        val toRecycle: Bitmap?
+                        synchronized(frameLock) {
+                            toRecycle = pendingRecyclePrimary
+                            pendingRecyclePrimary = latestPrimaryBitmap
+                            latestPrimaryBitmap = bmp
+                        }
+                        toRecycle?.recycle()
+                    } catch (e: Throwable) {
+                        Log.w(tag, "Async primary previewView.bitmap error: ${e.message}")
+                    } finally {
+                        isCapturingPrimary = false
                     }
                 }
-            } catch (e: Throwable) {
-                Log.w(tag, "TextureView.bitmap capture failed: ${e.message}")
             }
-        }
-
-        // Strategy 2: Safe UI-thread snapshot fallback via PreviewView.bitmap
-        var capturedBmp: Bitmap? = null
-        val latch = CountDownLatch(1)
-        mainHandler.post {
-            try {
-                capturedBmp = previewView.bitmap
-            } catch (e: Throwable) {
-                Log.w(tag, "PreviewView.bitmap failed on UI thread: ${e.message}")
-            } finally {
-                latch.countDown()
+            return synchronized(frameLock) { latestPrimaryBitmap }
+        } else {
+            if (!isCapturingSecondary && isRecording.get()) {
+                isCapturingSecondary = true
+                mainHandler.post {
+                    try {
+                        if (!isRecording.get()) return@post
+                        val bmp = previewView.bitmap ?: return@post
+                        val toRecycle: Bitmap?
+                        synchronized(frameLock) {
+                            toRecycle = pendingRecycleSecondary
+                            pendingRecycleSecondary = latestSecondaryBitmap
+                            latestSecondaryBitmap = bmp
+                        }
+                        toRecycle?.recycle()
+                    } catch (e: Throwable) {
+                        Log.w(tag, "Async secondary previewView.bitmap error: ${e.message}")
+                    } finally {
+                        isCapturingSecondary = false
+                    }
+                }
             }
+            return synchronized(frameLock) { latestSecondaryBitmap }
         }
-        try {
-            latch.await(20, TimeUnit.MILLISECONDS)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
-
-        return capturedBmp
     }
 
     private fun runVideoEncoding(
@@ -459,6 +450,26 @@ class DualCompositeRecorder(
             val secondaryCanvas = Canvas(secondaryBitmap)
             val secPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
+            // Initial warm-up snapshot so frame 0 has a valid, properly oriented image immediately
+            val initLatch = CountDownLatch(1)
+            mainHandler.post {
+                try {
+                    val pBmp = primaryPreviewView.bitmap
+                    val sBmp = if (isHardwareConcurrent && secondaryPreviewView != null) secondaryPreviewView.bitmap else null
+                    synchronized(frameLock) {
+                        latestPrimaryBitmap = pBmp
+                        latestSecondaryBitmap = sBmp
+                    }
+                } catch (e: Throwable) {
+                    Log.w(tag, "Initial snapshot capture failed: ${e.message}")
+                } finally {
+                    initLatch.countDown()
+                }
+            }
+            try {
+                initLatch.await(500, TimeUnit.MILLISECONDS)
+            } catch (ignored: InterruptedException) {}
+
             while (isRecording.get()) {
                 if (isPaused.get()) {
                     SystemClock.sleep(30)
@@ -468,24 +479,24 @@ class DualCompositeRecorder(
                 // Strictly uniform presentation timestamps for jitter-free playback
                 val presentationTimeNs = frameCount * frameIntervalNs
 
-                // 1. Fetch live primary camera frame with zero-allocation capture
+                // 1. Fetch live primary camera frame with non-blocking snapshot
                 val primaryRaw = capturePreviewFrame(primaryPreviewView, isPrimary = true)
-                if (primaryRaw != null) {
+                if (primaryRaw != null && !primaryRaw.isRecycled) {
                     lastValidPrimary = primaryRaw
                 }
-                val primaryBitmap = primaryRaw ?: lastValidPrimary ?: placeholderPrimaryBitmap
+                val primaryBitmap = if (primaryRaw != null && !primaryRaw.isRecycled) primaryRaw else (if (lastValidPrimary != null && !lastValidPrimary!!.isRecycled) lastValidPrimary else placeholderPrimaryBitmap)
 
                 // 2. Fetch or render secondary camera frame
                 val secBmp = if (isHardwareConcurrent && secondaryPreviewView != null) {
                     val secRaw = capturePreviewFrame(secondaryPreviewView, isPrimary = false)
-                    if (secRaw != null) {
+                    if (secRaw != null && !secRaw.isRecycled) {
                         lastValidSecondary = secRaw
                         secRaw
+                    } else if (lastValidSecondary != null && !lastValidSecondary!!.isRecycled) {
+                        lastValidSecondary
                     } else {
-                        lastValidSecondary ?: run {
-                            renderSimulatedFrame(secondaryCanvas, secondaryBitmap, secPaint, secondaryLens, frameCount)
-                            secondaryBitmap
-                        }
+                        renderSimulatedFrame(secondaryCanvas, secondaryBitmap, secPaint, secondaryLens, frameCount)
+                        secondaryBitmap
                     }
                 } else {
                     renderSimulatedFrame(secondaryCanvas, secondaryBitmap, secPaint, secondaryLens, frameCount)
@@ -936,10 +947,17 @@ class DualCompositeRecorder(
                 pendingBuffers.clear()
             }
 
-            primaryReusableBmp?.recycle()
-            primaryReusableBmp = null
-            secondaryReusableBmp?.recycle()
-            secondaryReusableBmp = null
+            synchronized(frameLock) {
+                latestPrimaryBitmap?.recycle()
+                latestPrimaryBitmap = null
+                pendingRecyclePrimary?.recycle()
+                pendingRecyclePrimary = null
+
+                latestSecondaryBitmap?.recycle()
+                latestSecondaryBitmap = null
+                pendingRecycleSecondary?.recycle()
+                pendingRecycleSecondary = null
+            }
         } catch (e: Exception) {
             Log.e(tag, "Cleanup error", e)
         }
