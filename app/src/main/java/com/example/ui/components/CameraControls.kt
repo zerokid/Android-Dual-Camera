@@ -138,6 +138,7 @@ fun RecordingTimerBadge(
     durationSec: Int,
     audioLevel: Float = 0f,
     audioEnabled: Boolean = true,
+    targetFps: Int = 30,
     modifier: Modifier = Modifier
 ) {
     if (recordingStatus == RecordingStatus.IDLE) return
@@ -186,6 +187,26 @@ fun RecordingTimerBadge(
                 ),
                 color = Color.White
             )
+            Spacer(modifier = Modifier.width(6.dp))
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (targetFps == 60) CyberCyan.copy(alpha = 0.25f) else Color(0x33FFFFFF),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (targetFps == 60) CyberCyan.copy(alpha = 0.6f) else BorderGlass
+                )
+            ) {
+                Text(
+                    text = "${targetFps}FPS",
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp
+                    ),
+                    color = if (targetFps == 60) CyberCyan else Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
             if (recordingStatus == RecordingStatus.PAUSED) {
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
@@ -212,10 +233,12 @@ fun TopControlBar(
     torchEnabled: Boolean,
     audioEnabled: Boolean,
     gridEnabled: Boolean,
+    targetFps: Int = 30,
     videoCount: Int,
     onToggleTorch: () -> Unit,
     onToggleAudio: () -> Unit,
     onToggleGrid: () -> Unit,
+    onToggleFps: () -> Unit,
     onOpenGallery: () -> Unit,
     onOpenSpecs: () -> Unit,
     modifier: Modifier = Modifier
@@ -281,6 +304,34 @@ fun TopControlBar(
 
             // Quick Toggle Icons
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // FPS Toggle Button (30 / 60)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (targetFps == 60) CyberCyan.copy(alpha = 0.25f) else Color(0x22FFFFFF),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (targetFps == 60) CyberCyan else BorderGlass
+                    ),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { onToggleFps() }
+                        .padding(horizontal = 2.dp)
+                        .testTag("fps_toggle_button")
+                ) {
+                    Text(
+                        text = if (targetFps == 60) "60P" else "30P",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        ),
+                        color = if (targetFps == 60) CyberCyan else Color.White,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 5.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
                 // Torch
                 IconButton(
                     onClick = onToggleTorch,

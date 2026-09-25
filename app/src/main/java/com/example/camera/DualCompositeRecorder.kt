@@ -133,13 +133,15 @@ class DualCompositeRecorder(
         secondaryPreviewView: PreviewView?,
         pipPosition: PipPosition,
         audioEnabled: Boolean,
+        targetFps: Int = 30,
         onFinalize: (File?, Long, String?) -> Unit
     ) {
         if (isRecording.get()) return
 
+        val fps = if (targetFps >= 60) 60 else 30
         val videosDir = File(context.filesDir, "videos").apply { mkdirs() }
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val destFile = File(videosDir, "DUO_${splitMode.name}_$timeStamp.mp4")
+        val destFile = File(videosDir, "DUO_${splitMode.name}_${fps}FPS_$timeStamp.mp4")
         outputFile = destFile
 
         try {
@@ -188,6 +190,7 @@ class DualCompositeRecorder(
                 secondaryPreviewView = secondaryPreviewView,
                 pipPosition = pipPosition,
                 recordAudio = recordAudio,
+                targetFps = fps,
                 onComplete = { durationMs, error ->
                     onFinalize(destFile, durationMs, error)
                 }
@@ -404,14 +407,17 @@ class DualCompositeRecorder(
         secondaryPreviewView: PreviewView?,
         pipPosition: PipPosition,
         recordAudio: Boolean,
+        targetFps: Int = 30,
         onComplete: (Long, String?) -> Unit
     ) {
         var durationMs = 0L
         try {
+            val fps = if (targetFps >= 60) 60 else 30
+            val bitrate = if (fps >= 60) 8_000_000 else 4_000_000
             val videoFormat = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
                 setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-                setInteger(MediaFormat.KEY_BIT_RATE, 4_000_000)
-                setInteger(MediaFormat.KEY_FRAME_RATE, 30)
+                setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
+                setInteger(MediaFormat.KEY_FRAME_RATE, fps)
                 setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
             }
@@ -425,7 +431,7 @@ class DualCompositeRecorder(
             initEgl(inputSurface)
 
             val bufferInfo = MediaCodec.BufferInfo()
-            val frameIntervalNs = 1_000_000_000L / 30L // Exactly 33,333,333 ns per frame
+            val frameIntervalNs = 1_000_000_000L / fps.toLong() // 16,666,666 ns for 60fps, 33,333,333 ns for 30fps
             var frameCount = 0L
             val loopStartNs = System.nanoTime()
 

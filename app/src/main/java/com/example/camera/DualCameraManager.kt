@@ -5,7 +5,11 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.util.Log
+import android.util.Range
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ConcurrentCamera
@@ -134,10 +138,27 @@ class DualCameraManager(
         videoCapture = VideoCapture.withOutput(recorder)
     }
 
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun createPreviewBuilder(targetFps: Int): Preview.Builder {
+        val builder = Preview.Builder()
+        if (targetFps >= 60) {
+            try {
+                Camera2Interop.Extender(builder).setCaptureRequestOption(
+                    CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
+                    Range(30, 60)
+                )
+            } catch (e: Exception) {
+                Log.w(tag, "Camera2Interop 60 FPS range setup warning: ${e.message}")
+            }
+        }
+        return builder
+    }
+
     fun bindViewfinders(
         primaryView: PreviewView,
         secondaryView: PreviewView?,
         primaryLens: LensFacing,
+        targetFps: Int = 30,
         onBound: (Boolean) -> Unit
     ) {
         val provider = cameraProvider ?: return
@@ -165,10 +186,10 @@ class DualCameraManager(
             // Attempt hardware concurrent binding if supported and secondary preview view is provided
             if (isHardwareConcurrentSupported && secondaryView != null) {
                 try {
-                    val primaryPreview = Preview.Builder().build().also {
+                    val primaryPreview = createPreviewBuilder(targetFps).build().also {
                         it.setSurfaceProvider(primaryView.surfaceProvider)
                     }
-                    val secondaryPreview = Preview.Builder().build().also {
+                    val secondaryPreview = createPreviewBuilder(targetFps).build().also {
                         it.setSurfaceProvider(secondaryView.surfaceProvider)
                     }
 
@@ -184,7 +205,7 @@ class DualCameraManager(
                     )
 
                     concurrentCamera = provider.bindToLifecycle(listOf(primaryConfig, secondaryConfig))
-                    Log.i(tag, "Successfully bound hardware concurrent cameras!")
+                    Log.i(tag, "Successfully bound hardware concurrent cameras (target FPS: $targetFps)!")
                     setupZoomStateObserver()
                     onBound(true)
                     return
@@ -195,7 +216,7 @@ class DualCameraManager(
             }
 
             // Fallback: Bind primary active camera with preview and recording
-            val primaryPreview = Preview.Builder().build().also {
+            val primaryPreview = createPreviewBuilder(targetFps).build().also {
                 it.setSurfaceProvider(primaryView.surfaceProvider)
             }
 
@@ -247,6 +268,7 @@ class DualCameraManager(
         secondaryLens: LensFacing,
         pipPosition: PipPosition,
         audioEnabled: Boolean,
+        targetFps: Int = 30,
         onDurationUpdate: (Int) -> Unit,
         onAudioLevelUpdate: (Float) -> Unit,
         onFinalize: (File?, Long, String?) -> Unit
@@ -273,12 +295,13 @@ class DualCameraManager(
                 secondaryPreviewView = secondaryPreviewView,
                 pipPosition = pipPosition,
                 audioEnabled = audioEnabled,
+                targetFps = targetFps,
                 onFinalize = { file, durationMs, error ->
                     compositeRecorder = null
                     onFinalize(file, durationMs, error)
                 }
             )
-            Log.i(tag, "Started DualCompositeRecorder with mode=$splitMode, audio=$audioEnabled")
+            Log.i(tag, "Started DualCompositeRecorder with mode=$splitMode, audio=$audioEnabled, fps=$targetFps")
             return
         } catch (e: Exception) {
             Log.w(tag, "DualCompositeRecorder initiation failed, trying CameraX fallback", e)

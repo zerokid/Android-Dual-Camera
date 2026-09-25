@@ -94,4 +94,18 @@ class ExampleRobolectricTest {
         viewModel.toggleAudio()
         assertEquals(!initialAudio, viewModel.uiState.value.audioEnabled)
     }
+
+    @Test
+    fun `viewModel fps toggle switches between 30 and 60`() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val viewModel = DualCamViewModel(app)
+
+        assertEquals(30, viewModel.uiState.value.targetFps)
+
+        viewModel.toggleFps()
+        assertEquals(60, viewModel.uiState.value.targetFps)
+
+        viewModel.toggleFps()
+        assertEquals(30, viewModel.uiState.value.targetFps)
+    }
 }

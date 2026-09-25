@@ -33,28 +33,34 @@ Enhance your video feeds with real-time visual color tuning:
 - **B&W Noir**: High-contrast dramatic monochrome.
 - **Cyber Cyan**: Stylized futuristic cyan-teal tint.
 
-### 4. 🔍 Pinch-to-Zoom & Torch Control
+### 4. ⚡ 60 FPS High Frame Rate & 30 FPS Toggle
+- **Smooth 60 FPS Recording**: One-tap toggle between **30P** and **60P** directly in the top control bar.
+- **Hardware AE Target Synchronization**: Automatically tunes Camera2 auto-exposure target FPS range (`[30, 60]`) on supported camera sensors.
+- **High-Bitrate Encoding**: Employs an elevated 8 Mbps video encoding pipeline with strict 16.6ms frame timestamps to eliminate motion jitter in fast-action sequences.
+- **Live FPS Status**: Real-time FPS badge embedded in the recording timer bar so you always know your active capture speed.
+
+### 5. 🔍 Pinch-to-Zoom & Torch Control
 - **Interactive Multi-Touch Zoom**: Smooth pinch-to-zoom gesture directly on the camera viewfinder.
 - **Live HUD Zoom Badge**: Real-time indicator displaying the active zoom magnification level.
 - **Integrated Flashlight/Torch**: Toggle flashlight for rear camera recording in low-light environments.
 
-### 5. 🎙️ Live Audio Metering & Synchronized Encoding
+### 6. 🎙️ Live Audio Metering & Synchronized Encoding
 - **Real-Time VU Level Meter**: Dynamic audio level bar tracking microphone amplitude and decibel input while recording.
 - **Accurate Duration Counter**: Live time counter displaying hours, minutes, and seconds of the active take.
 - **Hardware-Accelerated Composite Pipeline**: Uses OpenGL ES (GLES20/EGL14) rendering and Android `MediaCodec` (H.264/AVC video + AAC audio) with `MediaMuxer` to produce synchronized MP4 files directly on-device.
 
-### 6. 🛠️ Hardware Diagnostics & Camera Inspector
+### 7. 🛠️ Hardware Diagnostics & Camera Inspector
 - Built-in **Hardware Specs Dialog** that inspects your phone's camera hardware capabilities:
   - Concurrent camera streaming support (`availableConcurrentCameraInfos`)
   - Detected front and rear camera hardware IDs
   - Sensor hardware level and total optical camera count
 
-### 7. 🎬 Integrated Video Gallery & Custom Player
+### 8. 🎬 Integrated Video Gallery & Custom Player
 - **In-App Library**: Browse all recorded dual-camera videos sorted by creation date with file sizes and duration metadata.
 - **Custom Video Player**: Full-featured video player with seek slider, pause/play, replay, and loop playback.
 - **Native Android Sharing**: Share recorded MP4 videos directly to social media, messaging apps, or cloud storage via Android `FileProvider`.
 
-### 8. 🔒 100% Offline & Privacy-First
+### 9. 🔒 100% Offline & Privacy-First
 - Zero external tracking, zero server uploads, and no user account required.
 - All video recording, composition, and storage operations are executed entirely on your device.
 

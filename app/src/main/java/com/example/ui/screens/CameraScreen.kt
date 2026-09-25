@@ -116,6 +116,7 @@ fun CameraScreen(
                 primaryView = primaryPreviewView,
                 secondaryView = if (info.isConcurrentSupported) secondaryPreviewView else null,
                 primaryLens = uiState.primaryLens,
+                targetFps = uiState.targetFps,
                 onBound = { isConcurrent ->
                     // bound callback
                 }
@@ -131,17 +132,32 @@ fun CameraScreen(
         }
     }
 
+    fun rebindCameras(targetFps: Int = viewModel.uiState.value.targetFps) {
+        val manager = viewModel.cameraManager ?: return
+        val currentPrimary = viewModel.uiState.value.primaryLens
+        manager.bindViewfinders(
+            primaryView = primaryPreviewView,
+            secondaryView = if (uiState.isHardwareConcurrent) secondaryPreviewView else null,
+            primaryLens = currentPrimary,
+            targetFps = targetFps,
+            onBound = {}
+        )
+    }
+
     // Rebind when lens changes
     fun performSwap() {
         viewModel.swapLenses {
-            val manager = viewModel.cameraManager ?: return@swapLenses
-            val currentPrimary = viewModel.uiState.value.primaryLens
-            manager.bindViewfinders(
-                primaryView = primaryPreviewView,
-                secondaryView = if (uiState.isHardwareConcurrent) secondaryPreviewView else null,
-                primaryLens = currentPrimary,
-                onBound = {}
-            )
+            rebindCameras()
+        }
+    }
+
+    fun performToggleFps() {
+        if (uiState.recordingStatus != RecordingStatus.IDLE) {
+            Toast.makeText(context, "Cannot change FPS during active recording", Toast.LENGTH_SHORT).show()
+            return
+        }
+        viewModel.toggleFps { newFps ->
+            rebindCameras(targetFps = newFps)
         }
     }
 
@@ -206,10 +222,12 @@ fun CameraScreen(
                 torchEnabled = uiState.torchEnabled,
                 audioEnabled = uiState.audioEnabled,
                 gridEnabled = uiState.gridLinesEnabled,
+                targetFps = uiState.targetFps,
                 videoCount = recordedVideos.size,
                 onToggleTorch = { viewModel.toggleTorch() },
                 onToggleAudio = { viewModel.toggleAudio() },
                 onToggleGrid = { viewModel.toggleGridLines() },
+                onToggleFps = { performToggleFps() },
                 onOpenGallery = onNavigateToGallery,
                 onOpenSpecs = { viewModel.showSpecsDialog(true) }
             )
@@ -220,6 +238,7 @@ fun CameraScreen(
                 durationSec = uiState.recordingDurationSec,
                 audioLevel = uiState.audioLevel,
                 audioEnabled = uiState.audioEnabled,
+                targetFps = uiState.targetFps,
                 modifier = Modifier.padding(top = 6.dp)
             )
         }

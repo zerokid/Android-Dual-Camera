@@ -45,6 +45,7 @@ data class DualCamUiState(
     val isZooming: Boolean = false,
     val splitRatio: Float = 0.5f,
     val pipPosition: PipPosition = PipPosition.BOTTOM_RIGHT,
+    val targetFps: Int = 30,
     val showSpecsDialog: Boolean = false,
     val toastMessage: String? = null
 )
@@ -167,6 +168,17 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun toggleFps(onFpsChanged: ((Int) -> Unit)? = null) {
+        val newFps = if (_uiState.value.targetFps == 30) 60 else 30
+        _uiState.update {
+            it.copy(
+                targetFps = newFps,
+                toastMessage = "Target frame rate set to ${newFps} FPS"
+            )
+        }
+        onFpsChanged?.invoke(newFps)
+    }
+
     fun showSpecsDialog(show: Boolean) {
         _uiState.update { it.copy(showSpecsDialog = show) }
     }
@@ -195,6 +207,7 @@ class DualCamViewModel(application: Application) : AndroidViewModel(application)
             secondaryLens = state.secondaryLens,
             pipPosition = state.pipPosition,
             audioEnabled = state.audioEnabled,
+            targetFps = state.targetFps,
             onDurationUpdate = { durationSec ->
                 _uiState.update { it.copy(recordingDurationSec = durationSec) }
             },
